@@ -1,4 +1,4 @@
-const API = '/api';
+const API = import.meta.env.VITE_BACKEND_URL || '/api';
 
 export async function chat(message, history = [], context = '') {
   const res = await fetch(`${API}/chat`, {
