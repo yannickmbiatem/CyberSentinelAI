@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { Rss, Search, ExternalLink, ChevronLeft, ChevronRight } from 'lucide-react';
 import { getCVEs } from '../api';
 
@@ -25,19 +25,21 @@ function ScoreMeter({ score }) {
 
 export default function CVEFeed() {
   const [cves, setCves] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
+  const [loading, setLoading] = useState(true); // start loading immediately
+  const [hasSearched, setHasSearched] = useState(true); // auto-load on mount
   const [keyword, setKeyword] = useState('');
   const [days, setDays] = useState(7);
   const [severityFilter, setSeverityFilter] = useState('ALL');
   const [page, setPage] = useState(1);
+  const [source, setSource] = useState('live');
 
-  async function search() {
+  async function search(kw = keyword, d = days) {
     setLoading(true);
     setPage(1);
     try {
-      const data = await getCVEs(days, keyword);
+      const data = await getCVEs(d, kw);
       setCves(data.cves || []);
+      setSource(data.source || 'live');
       setHasSearched(true);
     } catch (err) {
       setCves([]);
@@ -45,13 +47,17 @@ export default function CVEFeed() {
     setLoading(false);
   }
 
-  const filtered = severityFilter === 'ALL' ? cves : cves.filter(c => c.severity === severityFilter);
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  // Auto-load on mount
+  useEffect(() => { search('', 7); }, []);
 
   function handleKeyDown(e) {
     if (e.key === 'Enter') search();
   }
+
+
+  const filtered = severityFilter === 'ALL' ? cves : cves.filter(c => c.severity === severityFilter);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const counts = {};
   SEVERITIES.slice(1).forEach(s => { counts[s] = cves.filter(c => c.severity === s).length; });

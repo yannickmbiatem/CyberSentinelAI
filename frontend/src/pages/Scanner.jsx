@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
-import { Radar, Play, AlertTriangle, Download, ChevronDown } from 'lucide-react';
-import { scanNetwork } from '../api';
+import { Radar, Play, AlertTriangle, Download, ChevronDown, Shield, Globe, Lock, Info } from 'lucide-react';
+import { scanNetwork, classifyTarget } from '../api';
 import MarkdownRenderer from '../components/MarkdownRenderer';
 
 const SCAN_PROFILES = [
@@ -11,29 +11,39 @@ const SCAN_PROFILES = [
 ];
 
 const PORT_RISK = {
-  21: { label: 'FTP', risk: 'HIGH' },
-  22: { label: 'SSH', risk: 'MEDIUM' },
-  23: { label: 'Telnet', risk: 'CRITICAL' },
-  25: { label: 'SMTP', risk: 'MEDIUM' },
-  80: { label: 'HTTP', risk: 'MEDIUM' },
-  110: { label: 'POP3', risk: 'MEDIUM' },
-  135: { label: 'RPC', risk: 'HIGH' },
-  139: { label: 'NetBIOS', risk: 'HIGH' },
-  443: { label: 'HTTPS', risk: 'LOW' },
-  445: { label: 'SMB', risk: 'CRITICAL' },
-  1433: { label: 'MSSQL', risk: 'HIGH' },
-  3306: { label: 'MySQL', risk: 'HIGH' },
-  3389: { label: 'RDP', risk: 'CRITICAL' },
-  5432: { label: 'PostgreSQL', risk: 'HIGH' },
-  6379: { label: 'Redis', risk: 'CRITICAL' },
-  27017: { label: 'MongoDB', risk: 'HIGH' },
+  21: { label: 'FTP', risk: 'HIGH', tip: 'Unencrypted file transfer — use SFTP/SCP instead.' },
+  22: { label: 'SSH', risk: 'MEDIUM', tip: 'Secure shell — ensure key-based auth and fail2ban.' },
+  23: { label: 'Telnet', risk: 'CRITICAL', tip: 'Transmits credentials in cleartext. Disable immediately.' },
+  25: { label: 'SMTP', risk: 'MEDIUM', tip: 'Mail server — ensure STARTTLS and SPF/DKIM records.' },
+  80: { label: 'HTTP', risk: 'MEDIUM', tip: 'Unencrypted web — redirect to HTTPS.' },
+  110: { label: 'POP3', risk: 'MEDIUM', tip: 'Unencrypted email retrieval — use POP3S on 995.' },
+  135: { label: 'RPC', risk: 'HIGH', tip: 'Windows RPC — commonly exploited. Firewall if not needed.' },
+  139: { label: 'NetBIOS', risk: 'HIGH', tip: 'Legacy Windows networking — disable if unused.' },
+  443: { label: 'HTTPS', risk: 'LOW', tip: 'Secure web — ensure valid certificate and TLS 1.2+.' },
+  445: { label: 'SMB', risk: 'CRITICAL', tip: 'EternalBlue / WannaCry vector. Block externally.' },
+  1433: { label: 'MSSQL', risk: 'HIGH', tip: 'SQL Server — never expose to internet.' },
+  3306: { label: 'MySQL', risk: 'HIGH', tip: 'MySQL — should only accept localhost connections.' },
+  3389: { label: 'RDP', risk: 'CRITICAL', tip: 'Remote Desktop — use VPN, not direct exposure.' },
+  5432: { label: 'PostgreSQL', risk: 'HIGH', tip: 'PostgreSQL — restrict to localhost or VPN.' },
+  6379: { label: 'Redis', risk: 'CRITICAL', tip: 'Redis — often unauthenticated. Never expose publicly.' },
+  27017: { label: 'MongoDB', risk: 'HIGH', tip: 'MongoDB — historically exposed with no auth by default.' },
+  8080: { label: 'HTTP-Alt', risk: 'MEDIUM', tip: 'Alternate HTTP port — check for admin panels.' },
+  8443: { label: 'HTTPS-Alt', risk: 'LOW', tip: 'Alternate HTTPS port — check for web apps.' },
 };
 
 function RiskBadge({ port }) {
   const info = PORT_RISK[Number(port)];
   if (!info) return null;
   const riskClass = info.risk === 'CRITICAL' ? 'badge-critical' : info.risk === 'HIGH' ? 'badge-high' : info.risk === 'MEDIUM' ? 'badge-medium' : 'badge-low';
-  return <span className={`badge ${riskClass}`}>{info.risk}</span>;
+  return (
+    <span
+      className={`badge ${riskClass}`}
+      title={info.tip}
+      style={{ cursor: 'help' }}
+    >
+      {info.risk}
+    </span>
+  );
 }
 
 function ElapsedTimer({ running }) {
@@ -52,6 +62,28 @@ function ElapsedTimer({ running }) {
   return <span style={{ color: 'var(--accent)', fontFamily: 'JetBrains Mono, monospace', fontSize: 13 }}>{elapsed}s elapsed</span>;
 }
 
+function ClassificationBadge({ kind }) {
+  if (!kind) return null;
+  const configs = {
+    loopback: { label: 'Loopback', color: 'var(--accent-green)', icon: '🔁', bg: 'var(--accent-green-dim)' },
+    private: { label: 'Private LAN', color: 'var(--accent-green)', icon: '🏠', bg: 'var(--accent-green-dim)' },
+    allowlisted_public: { label: 'Pre-authorized Demo', color: 'var(--accent)', icon: '✅', bg: 'var(--accent-dim)' },
+    public: { label: 'Public IP', color: 'var(--accent-orange)', icon: '🌐', bg: 'var(--accent-orange-dim)' },
+    forbidden: { label: 'Forbidden', color: 'var(--accent-red)', icon: '🚫', bg: 'var(--accent-red-dim)' },
+    invalid: { label: 'Invalid', color: 'var(--accent-red)', icon: '❌', bg: 'var(--accent-red-dim)' },
+  };
+  const cfg = configs[kind] || { label: kind, color: 'var(--text-muted)', icon: '?', bg: 'transparent' };
+  return (
+    <span style={{
+      padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600,
+      color: cfg.color, background: cfg.bg, border: `1px solid ${cfg.color}40`,
+      display: 'inline-flex', alignItems: 'center', gap: 4,
+    }}>
+      {cfg.icon} {cfg.label}
+    </span>
+  );
+}
+
 export default function Scanner() {
   const [target, setTarget] = useState('127.0.0.1');
   const [profile, setProfile] = useState(SCAN_PROFILES[0]);
@@ -59,17 +91,48 @@ export default function Scanner() {
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState(null);
   const [analysis, setAnalysis] = useState('');
+  const [classification, setClassification] = useState(null);
+  const [classifying, setClassifying] = useState(false);
+  const [error, setError] = useState('');
+  const classifyTimeout = useRef(null);
+
+  // Auto-classify target as user types (debounced 600ms)
+  useEffect(() => {
+    if (!target.trim()) { setClassification(null); return; }
+    clearTimeout(classifyTimeout.current);
+    setClassifying(true);
+    classifyTimeout.current = setTimeout(async () => {
+      try {
+        const data = await classifyTarget(target.trim());
+        setClassification(data);
+      } catch {
+        setClassification(null);
+      } finally {
+        setClassifying(false);
+      }
+    }, 600);
+    return () => clearTimeout(classifyTimeout.current);
+  }, [target]);
 
   async function runScan() {
     setLoading(true);
     setResults(null);
     setAnalysis('');
+    setError('');
     try {
       const data = await scanNetwork(target, profile.ports);
       setResults(data.results);
       setAnalysis(data.ai_analysis);
     } catch (err) {
-      setAnalysis(`**Error:** ${err.message}`);
+      const msg = err.message || 'Scan failed';
+      // Try to extract backend error detail
+      if (msg.includes('403')) {
+        setError('⛔ Scan refused by policy: this target is classified as forbidden (cloud metadata, broadcast, or reserved range).');
+      } else if (msg.includes('429')) {
+        setError('⏱ Rate limit exceeded. You can run a maximum of 5 scans per minute. Please wait and try again.');
+      } else {
+        setError(`Scan error: ${msg}`);
+      }
     }
     setLoading(false);
   }
@@ -78,11 +141,14 @@ export default function Scanner() {
     const blob = new Blob([JSON.stringify(results, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `scan_${target}.json`; a.click();
+    a.href = url; a.download = `scan_${target}_${new Date().toISOString().slice(0, 10)}.json`; a.click();
     URL.revokeObjectURL(url);
   }
 
   const allPorts = results?.hosts?.flatMap(h => h.protocols?.flatMap(p => p.ports || []) || []) || [];
+  const webVulns = results?.web_vulnerabilities;
+  const engineUsed = results?.engine;
+  const targetClassification = results?.target_classification;
 
   return (
     <div style={{ padding: '0 0 40px' }} className="animate-fade-up">
@@ -97,8 +163,26 @@ export default function Scanner() {
           <div style={{ display: 'flex', gap: 14, alignItems: 'flex-end', flexWrap: 'wrap' }}>
             {/* Target IP */}
             <div style={{ flex: '1 1 200px' }}>
-              <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Target IP</label>
-              <input value={target} onChange={e => setTarget(e.target.value)} placeholder="example.com or 192.168.1.1" className="input-field" />
+              <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                Target (IP or Hostname)
+              </label>
+              <input
+                value={target}
+                onChange={e => setTarget(e.target.value)}
+                placeholder="example.com or 192.168.1.1"
+                className="input-field"
+                onKeyDown={e => e.key === 'Enter' && runScan()}
+              />
+              {/* Real-time classification indicator */}
+              <div style={{ marginTop: 6, height: 20, display: 'flex', alignItems: 'center', gap: 6 }}>
+                {classifying && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Classifying…</span>}
+                {!classifying && classification && (
+                  <>
+                    <ClassificationBadge kind={classification.kind} />
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{classification.reason}</span>
+                  </>
+                )}
+              </div>
             </div>
 
             {/* Scan profile dropdown */}
@@ -138,7 +222,12 @@ export default function Scanner() {
               )}
             </div>
 
-            <button onClick={runScan} disabled={loading || !target} className="btn-primary" style={{ height: 42, paddingLeft: 24, paddingRight: 24 }}>
+            <button
+              onClick={runScan}
+              disabled={loading || !target || classification?.kind === 'forbidden' || classification?.kind === 'invalid'}
+              className="btn-primary"
+              style={{ height: 42, paddingLeft: 24, paddingRight: 24 }}
+            >
               <Play size={16} /> {loading ? 'Scanning...' : 'Launch Scan'}
             </button>
 
@@ -147,20 +236,27 @@ export default function Scanner() {
 
           <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-muted)', fontSize: 12 }}>
             <AlertTriangle size={12} color="var(--accent-orange)" />
-            You can now scan public domains. Ensure you have explicit authorization before scanning external targets.
+            Only scan systems you own or have explicit written authorization to test. Unauthorized scanning is illegal.
           </div>
         </div>
+
+        {/* Error banner */}
+        {error && (
+          <div style={{ background: 'var(--accent-red-dim)', border: '1px solid rgba(255,45,85,0.3)', borderRadius: 12, padding: '16px 20px', marginBottom: 20 }}>
+            <p style={{ color: 'var(--accent-red)', margin: 0, fontSize: 14 }}>{error}</p>
+          </div>
+        )}
 
         {/* Scanning animation */}
         {loading && (
           <div className="glass-card" style={{ padding: 32, textAlign: 'center', marginBottom: 20 }}>
             <div style={{ width: 60, height: 60, borderRadius: '50%', border: '3px solid var(--border)', borderTopColor: 'var(--accent)', margin: '0 auto 16px', animation: 'spin-slow 1s linear infinite' }} />
-            <div style={{ color: 'var(--accent)', fontWeight: 600, fontSize: 16 }}>Scanning {target}...</div>
-            <div style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 6 }}>Running Nmap with {profile.label} profile</div>
+            <div style={{ color: 'var(--accent)', fontWeight: 600, fontSize: 16 }}>Scanning {target}…</div>
+            <div style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 6 }}>Running {profile.label} · Nmap + optional Nikto web scan</div>
           </div>
         )}
 
-        {/* Error */}
+        {/* Scan error from backend */}
         {results?.error && (
           <div style={{ background: 'var(--accent-red-dim)', border: '1px solid rgba(255,45,85,0.3)', borderRadius: 12, padding: '16px 20px', marginBottom: 20 }}>
             <p style={{ color: 'var(--accent-red)', margin: 0 }}>{results.error}</p>
@@ -170,21 +266,37 @@ export default function Scanner() {
         {/* Scan Results Table */}
         {results && !results.error && results.hosts?.length > 0 && (
           <div className="glass-card" style={{ padding: 24, marginBottom: 20 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-              <h3 style={{ fontWeight: 700, fontSize: 15, margin: 0 }}>
-                Scan Results — {results.hosts.length} host(s) found
-              </h3>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <h3 style={{ fontWeight: 700, fontSize: 15, margin: 0 }}>
+                  Scan Results — {results.hosts.length} host(s)
+                </h3>
+                {engineUsed && (
+                  <span style={{
+                    padding: '2px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600,
+                    background: engineUsed === 'nmap' ? 'var(--accent-dim)' : 'var(--accent-orange-dim)',
+                    color: engineUsed === 'nmap' ? 'var(--accent)' : 'var(--accent-orange)',
+                    border: `1px solid ${engineUsed === 'nmap' ? 'var(--border-accent)' : 'rgba(255,152,0,0.3)'}`,
+                  }}>
+                    {engineUsed === 'nmap' ? '⚡ Nmap' : '🔌 Socket fallback'}
+                  </span>
+                )}
+                {targetClassification && <ClassificationBadge kind={targetClassification} />}
+              </div>
               <button onClick={exportJSON} className="btn-ghost" style={{ fontSize: 12 }}>
                 <Download size={13} /> Export JSON
               </button>
             </div>
+
             {results.hosts.map((host, i) => (
               <div key={i} style={{ marginBottom: 16 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
                   <code style={{ color: 'var(--accent)', fontFamily: 'JetBrains Mono, monospace', fontWeight: 700 }}>{host.address}</code>
                   {host.hostname && host.hostname !== 'N/A' && <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>({host.hostname})</span>}
                   {host.os_guess && <span className="badge badge-info">{host.os_guess}</span>}
-                  <span style={{ marginLeft: 'auto' }}><span style={{ fontSize: 12, color: allPorts.length > 0 ? 'var(--accent-green)' : 'var(--text-muted)' }}>{allPorts.length} open port(s)</span></span>
+                  <span style={{ marginLeft: 'auto', fontSize: 12, color: allPorts.length > 0 ? 'var(--accent-green)' : 'var(--text-muted)' }}>
+                    {allPorts.length} open port(s)
+                  </span>
                 </div>
                 {host.protocols.map((proto, j) => (
                   <div key={j} style={{ overflowX: 'auto' }}>
@@ -207,7 +319,9 @@ export default function Scanner() {
                             <td style={{ padding: '10px 12px' }}><span style={{ color: 'var(--accent-green)', fontWeight: 600 }}>{p.state}</span></td>
                             <td style={{ padding: '10px 12px', fontWeight: 500 }}>{p.service}</td>
                             <td style={{ padding: '10px 12px', color: 'var(--text-secondary)', fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }}>{p.product} {p.version}</td>
-                            <td style={{ padding: '10px 12px' }}><RiskBadge port={p.port} /></td>
+                            <td style={{ padding: '10px 12px' }}>
+                              <RiskBadge port={p.port} />
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -216,6 +330,35 @@ export default function Scanner() {
                 ))}
               </div>
             ))}
+          </div>
+        )}
+
+        {/* Nikto web vulnerability section */}
+        {webVulns && webVulns !== 'No specific web vulnerabilities found by Nikto (or server not responding).' && (
+          <div className="glass-card" style={{ padding: 24, marginBottom: 20, borderColor: 'rgba(255,152,0,0.3)' }}>
+            <h3 style={{ fontWeight: 700, fontSize: 15, marginBottom: 16, color: 'var(--accent-orange)', display: 'flex', alignItems: 'center', gap: 8 }}>
+              🌐 Nikto Web Vulnerability Scan
+              <span className="badge badge-high" style={{ marginLeft: 4 }}>Web Scan</span>
+            </h3>
+            <pre style={{
+              margin: 0, fontSize: 12, lineHeight: 1.7,
+              color: 'var(--text-secondary)', fontFamily: 'JetBrains Mono, monospace',
+              background: 'var(--bg-primary)', padding: 16, borderRadius: 8,
+              overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+            }}>
+              {webVulns}
+            </pre>
+          </div>
+        )}
+
+        {/* No hosts found */}
+        {results && !results.error && results.hosts?.length === 0 && (
+          <div className="glass-card" style={{ padding: 32, textAlign: 'center', marginBottom: 20 }}>
+            <Shield size={40} color="var(--accent-green)" style={{ marginBottom: 12 }} />
+            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--accent-green)', marginBottom: 6 }}>No Open Ports Found</div>
+            <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+              The target responded but no open ports were detected in the scanned range.
+            </div>
           </div>
         )}
 

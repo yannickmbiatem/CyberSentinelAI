@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { Shield, MessageSquare, Radar, FileText, Swords, Rss, Circle } from 'lucide-react';
+import { Shield, MessageSquare, Radar, FileText, Swords, Rss, Circle, Lock } from 'lucide-react';
 
 const navItems = [
   { to: '/dashboard', icon: Shield, label: 'Dashboard' },
@@ -9,6 +9,7 @@ const navItems = [
   { to: '/reports', icon: FileText, label: 'Reports' },
   { to: '/simulator', icon: Swords, label: 'Simulator' },
   { to: '/cve-feed', icon: Rss, label: 'CVE Feed' },
+  { to: '/audit', icon: Lock, label: 'Audit Log' },
 ];
 
 export default function Layout() {

@@ -73,3 +73,20 @@ export async function generatePDF(vulnerabilities, target) {
   a.click();
   URL.revokeObjectURL(url);
 }
+export async function getAuditLog(limit = 50) {
+  const res = await fetch(`${API}/audit?limit=${limit}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function getScanHistory(limit = 20) {
+  const res = await fetch(`${API}/scans/history?limit=${limit}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function classifyTarget(target) {
+  const res = await fetch(`${API}/policy/classify?target=${encodeURIComponent(target)}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}

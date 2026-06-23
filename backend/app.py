@@ -1,7 +1,7 @@
 import os
 import json
 import httpx
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -16,10 +16,15 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Allow frontend (Vite dev server) to call this backend
+# Allow frontend (Vite dev + Vercel production) to call this backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "https://*.vercel.app",     # Vercel preview deployments
+        os.getenv("FRONTEND_URL", ""),  # Custom production URL via env
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -94,12 +99,42 @@ class ScanResponse(BaseModel):
     ai_analysis: str
 
 @app.post("/api/scan", response_model=ScanResponse)
-async def run_scan(req: ScanRequest):
-    # IP validation removed to allow scanning of public IPs and domain names.
-    # WARNING: Users must ensure they have authorization to scan public targets.
+async def run_scan(req: ScanRequest, request: Request):
+    """Network scan with policy enforcement, scoring, persistence, and AI analysis."""
+    from policy import classify_target, is_rate_limited
+    from db import log_audit
 
+    # ── Policy gate ────────────────────────────────────────────────────────────
+    client_ip = request.client.host if request.client else "unknown"
+    classification = classify_target(req.target)
+    target_kind = classification.get("kind", "unknown")
+
+    # Block forbidden targets (cloud metadata, broadcast, etc.)
+    if target_kind == "forbidden" or target_kind == "invalid":
+        log_audit(req.target, "REFUSED_FORBIDDEN", classification,
+                  authorized=False, client_ip=client_ip, scan_type="network")
+        raise HTTPException(
+            status_code=403,
+            detail=f"Scan refused: target classified as '{target_kind}'. "
+                   f"Scanning this address is not permitted."
+        )
+
+    # Rate limit check (5 scans per minute)
+    if is_rate_limited(scan_type="network"):
+        log_audit(req.target, "REFUSED_RATE_LIMIT", classification,
+                  authorized=False, client_ip=client_ip, scan_type="network")
+        raise HTTPException(status_code=429, detail="Rate limit exceeded. Max 5 scans/minute.")
+
+    # Log this scan as ALLOWED
+    log_audit(req.target, "ALLOWED", classification,
+              authorized=True, client_ip=client_ip, scan_type="network")
+
+    # ── Execute scan ───────────────────────────────────────────────────────────
     from scanner import scan_target
     scan_results = scan_target(req.target, req.ports)
+
+    # Attach classification metadata to results for the frontend
+    scan_results["target_classification"] = target_kind
 
     # Compute the security score and persist the scan (no network here — cves=[]).
     from scoring import compute_security_score
@@ -347,6 +382,31 @@ async def login(req: LoginRequest):
 @app.get("/api/auth/me")
 async def me_endpoint():
     return {"status": "authenticated"}
+
+
+# ── Audit Log Endpoint ────────────────────────────────────────────────────────
+@app.get("/api/audit")
+async def get_audit(limit: int = 50):
+    """Return the most recent scan audit entries (ethical control log)."""
+    from db import get_audit_log
+    rows = get_audit_log(limit=limit)
+    return {"entries": rows, "count": len(rows)}
+
+
+# ── Scan History Endpoint ─────────────────────────────────────────────────────
+@app.get("/api/scans/history")
+async def scan_history(limit: int = 20):
+    """Return scan history list for charting on the dashboard."""
+    from db import get_history
+    return {"history": get_history(limit=limit)}
+
+
+# ── Target Policy Info Endpoint ───────────────────────────────────────────────
+@app.get("/api/policy/classify")
+async def classify(target: str):
+    """Classify a target before scanning (for frontend pre-validation)."""
+    from policy import classify_target
+    return classify_target(target)
 
 
 # ── Run Server ────────────────────────────────────────────────────────────────

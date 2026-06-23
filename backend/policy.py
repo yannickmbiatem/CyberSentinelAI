@@ -112,3 +112,14 @@ def classify_target(target: str) -> dict:
 # Rate-limit budgets (enforced via the audit log in db.py).
 MAX_SCANS_PER_MIN = 5
 MAX_WEB_SCANS_PER_MIN = 3
+
+
+def is_rate_limited(scan_type: str = "network") -> bool:
+    """Return True if the rate limit for this scan type has been exceeded."""
+    try:
+        from db import count_recent_scans
+        max_allowed = MAX_WEB_SCANS_PER_MIN if scan_type == "web" else MAX_SCANS_PER_MIN
+        recent = count_recent_scans(window_seconds=60, scan_type=scan_type)
+        return recent >= max_allowed
+    except Exception:
+        return False  # If DB is unavailable, don't block the scan

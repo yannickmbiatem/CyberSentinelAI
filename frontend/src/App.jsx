@@ -6,6 +6,7 @@ import Scanner from './pages/Scanner';
 import Reports from './pages/Reports';
 import Simulator from './pages/Simulator';
 import CVEFeed from './pages/CVEFeed';
+import AuditLog from './pages/AuditLog';
 
 export default function App() {
   return (
@@ -19,6 +20,7 @@ export default function App() {
           <Route path="/reports" element={<Reports />} />
           <Route path="/simulator" element={<Simulator />} />
           <Route path="/cve-feed" element={<CVEFeed />} />
+          <Route path="/audit" element={<AuditLog />} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -154,7 +154,7 @@ async def get_recent_cves(days: int = 7, keyword: str = "") -> dict:
     Fetch recent CVEs with a resilient fallback chain.
     ALWAYS returns an envelope dict (see module docstring). Never raises.
     """
-    end_date = datetime.utcnow()
+    end_date = datetime.now(timezone.utc)
     start_date = end_date - timedelta(days=days)
     params = {
         "pubStartDate": start_date.strftime("%Y-%m-%dT00:00:00.000"),

@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { Shield, AlertTriangle, TrendingUp, Bug, ExternalLink, Zap, MessageSquare, Radar } from 'lucide-react';
+import { Shield, AlertTriangle, TrendingUp, Bug, ExternalLink, Zap, MessageSquare, Radar, RefreshCw, Activity, Lock } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { getCVEs, getDashboard } from '../api';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 
-// Animated SVG ring for security score
+// ── Animated SVG ring for security score ──────────────────────────────────────
 function ScoreRing({ score }) {
   const [displayed, setDisplayed] = useState(0);
   const radius = 54;
@@ -36,10 +37,7 @@ function ScoreRing({ score }) {
           style={{ transition: 'stroke-dashoffset 0.05s linear', filter: `drop-shadow(0 0 6px ${color})` }}
         />
       </svg>
-      <div style={{
-        position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
-        alignItems: 'center', justifyContent: 'center',
-      }}>
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ fontSize: 28, fontWeight: 800, color, lineHeight: 1 }}>{displayed}</div>
         <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>/100</div>
       </div>
@@ -52,6 +50,46 @@ function SeverityBadge({ severity }) {
   return <span className={`badge ${cls}`}>{severity}</span>;
 }
 
+// ── Custom tooltip for the history chart ─────────────────────────────────────
+function HistoryTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  const score = payload[0].value;
+  const color = score >= 70 ? '#00e676' : score >= 40 ? '#ff9800' : '#ff2d55';
+  return (
+    <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>
+      <div style={{ color: 'var(--text-muted)', marginBottom: 4 }}>{label}</div>
+      <div style={{ color, fontWeight: 700, fontSize: 16 }}>{score}<span style={{ color: 'var(--text-muted)', fontSize: 11 }}>/100</span></div>
+    </div>
+  );
+}
+
+// ── Score breakdown bar ───────────────────────────────────────────────────────
+function BreakdownBars({ breakdown }) {
+  if (!breakdown?.length) return null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+      {breakdown.map((item, i) => (
+        <div key={i}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 11 }}>
+            <span style={{ color: 'var(--text-secondary)' }}>{item.reason}</span>
+            <span style={{ color: item.points > 0 ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight: 700, fontFamily: 'JetBrains Mono, monospace' }}>
+              {item.points > 0 ? '+' : ''}{item.points}
+            </span>
+          </div>
+          <div style={{ height: 4, borderRadius: 2, background: 'var(--border)', overflow: 'hidden' }}>
+            <div style={{
+              height: '100%',
+              width: `${Math.min(100, Math.abs(item.points) * 4)}%`,
+              background: item.points > 0 ? 'var(--accent-green)' : 'var(--accent-red)',
+              borderRadius: 2, transition: 'width 0.6s ease',
+            }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const [cves, setCves] = useState([]);
   const [filteredCves, setFilteredCves] = useState([]);
@@ -59,18 +97,32 @@ export default function Dashboard() {
   const [filter, setFilter] = useState('ALL');
   const [dash, setDash] = useState(null);
   const [cveSource, setCveSource] = useState('live');
+  const [lastRefresh, setLastRefresh] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
   const navigate = useNavigate();
 
-  useEffect(() => {
-    // Real dashboard data: score, risk, CVE count (one resilient call).
-    getDashboard().then(setDash).catch(() => setDash(null));
-
-    // Detailed CVE feed list (envelope: {cves, source, ...}).
-    getCVEs(7).then(data => {
-      setCves(data.cves || []);
-      setCveSource(data.source || 'live');
+  async function loadData() {
+    setRefreshing(true);
+    try {
+      const [dashData, cveData] = await Promise.all([
+        getDashboard().catch(() => null),
+        getCVEs(7).catch(() => ({ cves: [], source: 'error' })),
+      ]);
+      if (dashData) setDash(dashData);
+      setCves(cveData.cves || []);
+      setCveSource(cveData.source || 'error');
+      setLastRefresh(new Date());
+    } finally {
       setLoading(false);
-    }).catch(() => setLoading(false));
+      setRefreshing(false);
+    }
+  }
+
+  // Initial load + auto-refresh every 60s
+  useEffect(() => {
+    loadData();
+    const interval = setInterval(loadData, 60000);
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -80,9 +132,18 @@ export default function Dashboard() {
 
   const criticalCount = cves.filter(c => c.severity === 'CRITICAL').length;
   const highCount = cves.filter(c => c.severity === 'HIGH').length;
+  const mediumCount = cves.filter(c => c.severity === 'MEDIUM').length;
 
   const score = dash?.score ?? null;
   const riskLevel = dash?.risk_level ?? 'N/A';
+  const history = dash?.history ?? [];
+  const breakdown = dash?.breakdown ?? [];
+
+  // Format history for Recharts
+  const chartData = history.map(h => ({
+    time: h.timestamp ? h.timestamp.slice(5, 16).replace('T', ' ') : '',
+    score: h.score,
+  }));
 
   const filters = ['ALL', 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
 
@@ -95,20 +156,38 @@ export default function Dashboard() {
     <div style={{ padding: '0 0 32px' }} className="animate-fade-up">
       {/* Header */}
       <div className="page-header">
-        <div className="page-title">
-          <Shield size={22} color="var(--accent)" />
-          Security Dashboard
+        <div>
+          <div className="page-title">
+            <Shield size={22} color="var(--accent)" />
+            Security Dashboard
+          </div>
+          <div className="page-subtitle">
+            Real-time overview of your security posture
+            {lastRefresh && (
+              <span style={{ marginLeft: 12, fontSize: 11, color: 'var(--text-muted)' }}>
+                Last updated: {lastRefresh.toLocaleTimeString()}
+              </span>
+            )}
+          </div>
         </div>
-        <div className="page-subtitle">Real-time overview of your security posture</div>
+        <button
+          onClick={loadData}
+          disabled={refreshing}
+          className="btn-ghost"
+          style={{ fontSize: 12, gap: 6 }}
+        >
+          <RefreshCw size={13} style={{ animation: refreshing ? 'spin-slow 1s linear infinite' : 'none' }} />
+          Refresh
+        </button>
       </div>
 
-      <div style={{ padding: '28px 32px', maxWidth: 1200 }}>
+      <div style={{ padding: '28px 32px', maxWidth: 1300 }}>
 
         {/* Top stats row */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 28 }}>
 
           {/* Score ring card */}
-          <div className="glass-card" style={{ padding: '24px 20px', textAlign: 'center', gridRow: 'span 1' }}>
+          <div className="glass-card" style={{ padding: '24px 20px', textAlign: 'center' }}>
             <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 16 }}>
               Security Score
             </div>
@@ -126,7 +205,7 @@ export default function Dashboard() {
               <>
                 <ScoreRing score={score} />
                 <div style={{ marginTop: 12, fontSize: 13, color: score >= 70 ? 'var(--accent-green)' : score >= 40 ? 'var(--accent-orange)' : 'var(--accent-red)', fontWeight: 600 }}>
-                  {score >= 70 ? 'Good' : score >= 40 ? 'Moderate' : 'Critical'}
+                  {score >= 70 ? '✓ Good Posture' : score >= 40 ? '⚠ Moderate Risk' : '🔴 Critical Risk'}
                 </div>
                 {dash?.latest_scan_summary && (
                   <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-muted)' }}>
@@ -146,9 +225,19 @@ export default function Dashboard() {
               <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>CVEs (7d)</span>
             </div>
             <div style={{ fontSize: 36, fontWeight: 800, color: 'var(--accent-red)', lineHeight: 1 }}>{loading ? '—' : cves.length}</div>
-            <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
-              <span className="badge badge-critical">{criticalCount} Critical</span>
-              <span className="badge badge-high">{highCount} High</span>
+            <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                <span style={{ color: 'var(--text-muted)' }}>Critical</span>
+                <span className="badge badge-critical">{criticalCount}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                <span style={{ color: 'var(--text-muted)' }}>High</span>
+                <span className="badge badge-high">{highCount}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                <span style={{ color: 'var(--text-muted)' }}>Medium</span>
+                <span className="badge badge-medium">{mediumCount}</span>
+              </div>
             </div>
           </div>
 
@@ -160,8 +249,18 @@ export default function Dashboard() {
               </div>
               <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Risk Level</span>
             </div>
-            <div style={{ fontSize: 32, fontWeight: 800, lineHeight: 1, color: riskLevel === 'Critical' || riskLevel === 'High' ? 'var(--accent-red)' : riskLevel === 'Medium' ? 'var(--accent-orange)' : riskLevel === 'Low' ? 'var(--accent-green)' : 'var(--text-muted)' }}>{riskLevel}</div>
+            <div style={{ fontSize: 32, fontWeight: 800, lineHeight: 1, color: riskLevel === 'Critical' || riskLevel === 'High' ? 'var(--accent-red)' : riskLevel === 'Medium' ? 'var(--accent-orange)' : riskLevel === 'Low' ? 'var(--accent-green)' : 'var(--text-muted)' }}>
+              {riskLevel}
+            </div>
             <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-muted)' }}>{score == null ? 'Run a scan first' : 'From latest scan'}</div>
+
+            {/* Score breakdown */}
+            {breakdown.length > 0 && (
+              <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Breakdown</div>
+                <BreakdownBars breakdown={breakdown.slice(0, 4)} />
+              </div>
+            )}
           </div>
 
           {/* Quick actions */}
@@ -174,6 +273,7 @@ export default function Dashboard() {
                 { label: 'Run Scan', icon: Radar, path: '/scanner', color: 'var(--accent)' },
                 { label: 'AI Chat', icon: MessageSquare, path: '/chat', color: 'var(--accent-green)' },
                 { label: 'Simulate Attack', icon: Zap, path: '/simulator', color: 'var(--accent-red)' },
+                { label: 'Audit Log', icon: Lock, path: '/audit', color: 'var(--accent-orange)' },
               ].map(({ label, icon: Icon, path, color }) => (
                 <button
                   key={path}
@@ -194,10 +294,47 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* Score History Chart */}
+        {chartData.length > 1 && (
+          <div className="glass-card" style={{ padding: 24, marginBottom: 28 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
+              <Activity size={18} color="var(--accent)" />
+              <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Security Score Trend</h3>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Last {chartData.length} scans</span>
+            </div>
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={chartData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <XAxis dataKey="time" tick={{ fill: 'var(--text-muted)', fontSize: 10 }} tickLine={false} axisLine={false} />
+                <YAxis domain={[0, 100]} tick={{ fill: 'var(--text-muted)', fontSize: 10 }} tickLine={false} axisLine={false} />
+                <Tooltip content={<HistoryTooltip />} />
+                <ReferenceLine y={80} stroke="var(--accent-green)" strokeDasharray="3 3" opacity={0.5} />
+                <ReferenceLine y={40} stroke="var(--accent-red)" strokeDasharray="3 3" opacity={0.5} />
+                <Line
+                  type="monotone" dataKey="score"
+                  stroke="var(--accent)" strokeWidth={2}
+                  dot={{ fill: 'var(--accent)', strokeWidth: 0, r: 4 }}
+                  activeDot={{ r: 6, fill: 'var(--accent)', boxShadow: '0 0 8px var(--accent)' }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+            <div style={{ display: 'flex', gap: 20, marginTop: 8, fontSize: 11, color: 'var(--text-muted)' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ width: 24, height: 2, background: 'var(--accent-green)', display: 'inline-block', borderRadius: 1 }} />
+                Good (≥80)
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ width: 24, height: 2, background: 'var(--accent-red)', display: 'inline-block', borderRadius: 1 }} />
+                Critical (&lt;40)
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* CVE Live Feed */}
         <div className="glass-card" style={{ padding: 24 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-            <h3 style={{ fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <h3 style={{ fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
               <AlertTriangle size={18} color="var(--accent-red)" />
               Live CVE Feed
               {!loading && !sourceLabel && <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 }}>• Last 7 days from NVD</span>}
