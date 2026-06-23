@@ -1,0 +1,74 @@
+[
+  {
+    "id": "CVE-2021-44228",
+    "description": "Apache Log4j2 JNDI features used in configuration, log messages, and parameters do not protect against attacker-controlled LDAP and other JNDI related endpoints (Log4Shell). Allows remote code execution.",
+    "severity": "CRITICAL",
+    "score": 10.0,
+    "published": "2021-12-10",
+    "affected": ["apache log4j"],
+    "url": "https://nvd.nist.gov/vuln/detail/CVE-2021-44228"
+  },
+  {
+    "id": "CVE-2022-22965",
+    "description": "Spring Framework RCE via Data Binding on JDK 9+ (Spring4Shell). A non-trivial deployment with Spring MVC may be vulnerable to remote code execution through data binding.",
+    "severity": "CRITICAL",
+    "score": 9.8,
+    "published": "2022-04-01",
+    "affected": ["vmware spring_framework"],
+    "url": "https://nvd.nist.gov/vuln/detail/CVE-2022-22965"
+  },
+  {
+    "id": "CVE-2020-1938",
+    "description": "Apache Tomcat AJP Connector flaw (Ghostcat) allows reading or including arbitrary files from the web application, potentially leading to remote code execution.",
+    "severity": "CRITICAL",
+    "score": 9.8,
+    "published": "2020-02-24",
+    "affected": ["apache tomcat"],
+    "url": "https://nvd.nist.gov/vuln/detail/CVE-2020-1938"
+  },
+  {
+    "id": "CVE-2021-34527",
+    "description": "Windows Print Spooler remote code execution vulnerability (PrintNightmare). An attacker can run arbitrary code with SYSTEM privileges.",
+    "severity": "HIGH",
+    "score": 8.8,
+    "published": "2021-07-02",
+    "affected": ["microsoft windows"],
+    "url": "https://nvd.nist.gov/vuln/detail/CVE-2021-34527"
+  },
+  {
+    "id": "CVE-2017-0144",
+    "description": "The SMBv1 server in Microsoft Windows allows remote code execution via crafted packets (EternalBlue). Used by the WannaCry ransomware.",
+    "severity": "HIGH",
+    "score": 8.1,
+    "published": "2017-03-16",
+    "affected": ["microsoft windows"],
+    "url": "https://nvd.nist.gov/vuln/detail/CVE-2017-0144"
+  },
+  {
+    "id": "CVE-2016-5195",
+    "description": "Race condition in the Linux kernel memory subsystem (Dirty COW) allows local users to gain write access to read-only memory mappings and escalate privileges.",
+    "severity": "HIGH",
+    "score": 7.8,
+    "published": "2016-11-10",
+    "affected": ["linux linux_kernel"],
+    "url": "https://nvd.nist.gov/vuln/detail/CVE-2016-5195"
+  },
+  {
+    "id": "CVE-2021-41773",
+    "description": "Path traversal and file disclosure in Apache HTTP Server 2.4.49. With certain configurations this can lead to remote code execution.",
+    "severity": "HIGH",
+    "score": 7.5,
+    "published": "2021-10-05",
+    "affected": ["apache http_server"],
+    "url": "https://nvd.nist.gov/vuln/detail/CVE-2021-41773"
+  },
+  {
+    "id": "CVE-2018-15473",
+    "description": "OpenSSH allows remote attackers to enumerate valid usernames by observing differences in authentication responses.",
+    "severity": "MEDIUM",
+    "score": 5.3,
+    "published": "2018-08-17",
+    "affected": ["openbsd openssh"],
+    "url": "https://nvd.nist.gov/vuln/detail/CVE-2018-15473"
+  }
+]
