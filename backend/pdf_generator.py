@@ -12,6 +12,13 @@ from reportlab.lib.units import inch, cm
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
 from io import BytesIO
 from datetime import datetime
+import html
+
+
+def escape_xml(text):
+    if text is None:
+        return ""
+    return html.escape(str(text))
 
 
 def generate_remediation_pdf(vulnerabilities: list[dict], target: str, analyst: str = "CyberSentinel AI") -> bytes:
@@ -99,10 +106,12 @@ def generate_remediation_pdf(vulnerabilities: list[dict], target: str, analyst: 
 
     # Meta info table
     now = datetime.now().strftime("%B %d, %Y at %H:%M")
+    target_escaped = escape_xml(target)
+    analyst_escaped = escape_xml(analyst)
     meta_data = [
-        [Paragraph("Target System:", label_style), Paragraph(target, body_style),
+        [Paragraph("Target System:", label_style), Paragraph(target_escaped, body_style),
          Paragraph("Generated:", label_style), Paragraph(now, body_style)],
-        [Paragraph("Analyst:", label_style), Paragraph(analyst, body_style),
+        [Paragraph("Analyst:", label_style), Paragraph(analyst_escaped, body_style),
          Paragraph("Total Issues:", label_style), Paragraph(str(len(vulnerabilities)), body_style)],
     ]
     meta_table = Table(meta_data, colWidths=[3 * cm, 6 * cm, 3 * cm, 5.5 * cm])
@@ -186,11 +195,11 @@ def generate_remediation_pdf(vulnerabilities: list[dict], target: str, analyst: 
     for i, vuln in enumerate(vulnerabilities, 1):
         sev = vuln.get("severity", "UNKNOWN").upper()
         sev_color = SEVERITY_COLORS.get(sev, HexColor('#6b7280'))
-        name = vuln.get("name", "Unknown Vulnerability")
-        cve = vuln.get("cve", "")
-        description = vuln.get("description", "No description available.")
-        fix = vuln.get("fix", "No remediation provided.")
-        command = vuln.get("command", "")
+        name = escape_xml(vuln.get("name", "Unknown Vulnerability"))
+        cve = escape_xml(vuln.get("cve", ""))
+        description = escape_xml(vuln.get("description", "No description available."))
+        fix = escape_xml(vuln.get("fix", "No remediation provided."))
+        command = escape_xml(vuln.get("command", ""))
         priority = vuln.get("priority", i)
 
         # Vulnerability header

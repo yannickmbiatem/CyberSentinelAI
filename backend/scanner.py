@@ -185,27 +185,36 @@ def _scan_with_sockets(target: str, ports: str) -> dict:
     }
 
 
-# ── Web Vulnerability Scan (Nikto) ─────────────────────────────────────────────
+# ── Web Vulnerability Scan (Nikto) — passive trigger from network scan ──────────
 def _run_nikto(target: str) -> str:
-    import subprocess
+    """
+    Quick Nikto pass triggered when a network scan finds open web ports.
+    Uses the nikto_scanner module for path discovery and proper execution.
+    Returns a plain-text summary (raw lines) for the AI analysis prompt.
+    """
     try:
-        # Run nikto via perl with a max time to avoid hanging the API response
-        cmd = ["perl", r"C:\nikto\program\nikto.pl", "-h", target, "-maxtime", "45s"]
-        # Timeout of 60s for the subprocess itself as a failsafe
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        
-        findings = []
-        for line in result.stdout.splitlines():
-            # Nikto output prefixes actual findings with '+'
-            if line.startswith('+') and "No web server found" not in line and "target IP" not in line and "Target Hostname" not in line:
-                findings.append(line.strip())
-        
+        from nikto_scanner import find_nikto, find_perl, parse_nikto_output
+        import subprocess
+
+        nikto_path = find_nikto()
+        if not nikto_path:
+            return "Nikto not found — install it at <project>/nikto/program/nikto.pl or system PATH."
+
+        if nikto_path.endswith(".pl"):
+            perl = find_perl()
+            cmd = [perl, nikto_path, "-h", target, "-maxtime", "45s", "-nointeractive", "-Format", "txt"]
+        else:
+            cmd = [nikto_path, "-h", target, "-maxtime", "45s", "-nointeractive", "-Format", "txt"]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60,
+                                encoding="utf-8", errors="replace")
+
+        findings = parse_nikto_output(result.stdout)
         if findings:
-            # We limit to 30 lines to avoid token explosion for the AI
-            return "\n".join(findings[:30]) 
-        return "No specific web vulnerabilities found by Nikto (or server not responding)."
-    except subprocess.TimeoutExpired:
-        return "Nikto scan timed out."
+            # Return as readable lines for AI context — limit to 30 most severe
+            lines = [f"[{f['severity']}] {f['description']}" for f in findings[:30]]
+            return "\n".join(lines)
+        return "No specific web vulnerabilities found by Nikto (or server not responding on web port)."
     except Exception as e:
         return f"Nikto execution error: {e}"
 
@@ -232,17 +241,20 @@ def scan_target(target: str, ports: str = "1-1024") -> dict:
         except Exception as e:
             res = _empty_result(target, ports, {"error": f"Scan failed: {e}"})
 
-    # If the scan was successful, check if any web ports are open to trigger Nikto
+    # If the scan was successful, check if any web ports are open to trigger quick Nikto pass
     if res and not res.get("error"):
         has_web = False
+        web_port = 80
         for host in res.get("hosts", []):
             for proto in host.get("protocols", []):
                 for p_info in proto.get("ports", []):
                     if p_info.get("port") in [80, 443, 8080, 8443] and p_info.get("state") == "open":
                         has_web = True
+                        web_port = p_info.get("port")
                         break
-        
+
         if has_web:
             res["web_vulnerabilities"] = _run_nikto(target)
+            res["web_port"] = web_port
 
     return res

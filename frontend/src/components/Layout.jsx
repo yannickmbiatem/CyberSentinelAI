@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { Shield, MessageSquare, Radar, FileText, Swords, Rss, Circle, Lock } from 'lucide-react';
+import { Shield, MessageSquare, Radar, FileText, Swords, Rss, Circle, Lock, Globe } from 'lucide-react';
 
 const navItems = [
   { to: '/dashboard', icon: Shield, label: 'Dashboard' },
   { to: '/chat', icon: MessageSquare, label: 'AI Chat' },
-  { to: '/scanner', icon: Radar, label: 'Scanner' },
+  { to: '/scanner', icon: Radar, label: 'Net Scanner' },
+  { to: '/web-scanner', icon: Globe, label: 'Web Scanner' },
   { to: '/reports', icon: FileText, label: 'Reports' },
   { to: '/simulator', icon: Swords, label: 'Simulator' },
   { to: '/cve-feed', icon: Rss, label: 'CVE Feed' },
@@ -14,27 +15,52 @@ const navItems = [
 
 export default function Layout() {
   const [backendStatus, setBackendStatus] = useState('checking'); // 'online' | 'offline' | 'checking'
+  const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
     async function checkHealth() {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
       try {
         const res = await fetch('/api/health', { signal: controller.signal });
         clearTimeout(timeoutId);
-        setBackendStatus(res.ok ? 'online' : 'offline');
-      } catch {
+        if (res.ok) {
+          setBackendStatus('online');
+          setErrorMsg('');
+        } else {
+          setBackendStatus('offline');
+          setErrorMsg(`HTTP ${res.status}`);
+        }
+      } catch (err) {
         clearTimeout(timeoutId);
         setBackendStatus('offline');
+        setErrorMsg(err.message || 'Network Error');
       }
     }
     checkHealth();
-    const interval = setInterval(checkHealth, 30000);
+    const interval = setInterval(checkHealth, 10000); // 10s interval
     return () => clearInterval(interval);
   }, []);
 
+  async function forceCheck() {
+    setBackendStatus('checking');
+    setErrorMsg('');
+    try {
+      const res = await fetch('/api/health');
+      if (res.ok) {
+        setBackendStatus('online');
+      } else {
+        setBackendStatus('offline');
+        setErrorMsg(`HTTP ${res.status}`);
+      }
+    } catch (err) {
+      setBackendStatus('offline');
+      setErrorMsg(err.message || 'Network Error');
+    }
+  }
+
   const statusColor = backendStatus === 'online' ? 'var(--accent-green)' : backendStatus === 'offline' ? 'var(--accent-red)' : 'var(--accent-orange)';
-  const statusLabel = backendStatus === 'online' ? 'Backend Online' : backendStatus === 'offline' ? 'Backend Offline' : 'Connecting...';
+  const statusLabel = backendStatus === 'online' ? 'Backend Online' : backendStatus === 'offline' ? `Offline: ${errorMsg}` : 'Connecting...';
 
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
@@ -98,7 +124,7 @@ export default function Layout() {
 
         {/* Footer */}
         <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
+          <div onClick={forceCheck} style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6, cursor: 'pointer' }}>
             <Circle
               size={8}
               fill={statusColor}

@@ -56,6 +56,7 @@ export default function Reports() {
   const [wifiFile, setWifiFile] = useState(null);
   const [targetName, setTargetName] = useState('');
   const [analysis, setAnalysis] = useState('');
+  const [vulnerabilities, setVulnerabilities] = useState([]);
   const [loading, setLoading] = useState(false);
   const [pdfLoading, setPdfLoading] = useState(false);
 
@@ -71,21 +72,21 @@ export default function Reports() {
         targetName || 'Unknown Target'
       );
       setAnalysis(data.analysis);
+      setVulnerabilities(data.vulnerabilities || []);
     } catch (err) {
       setAnalysis(`**Error:** ${err.message}`);
+      setVulnerabilities([]);
     }
     setLoading(false);
   }
 
   async function handlePDF() {
     setPdfLoading(true);
-    const vulns = [
-      { name: 'Open SSH Port (22)', severity: 'Medium', priority: 1, cve: '', description: 'SSH port is open and accepts password authentication.', fix: 'Disable password authentication and use SSH keys only.', command: 'sudo nano /etc/ssh/sshd_config\nSet PasswordAuthentication no' },
-      { name: 'Outdated Apache (2.4.49)', severity: 'High', priority: 2, cve: 'CVE-2021-41773', description: 'Apache 2.4.49 has a path traversal and RCE vulnerability.', fix: 'Update Apache to version 2.4.51 or later immediately.', command: 'sudo apt update && sudo apt upgrade apache2' },
-      { name: 'Telnet Service Active', severity: 'Critical', priority: 3, cve: '', description: 'Telnet transmits credentials in cleartext.', fix: 'Disable Telnet and use SSH instead.', command: 'sudo systemctl disable telnet\nsudo systemctl stop telnet' },
-    ];
     try {
-      await generatePDF(vulns, targetName || 'Unknown Target');
+      if (vulnerabilities.length === 0) {
+        throw new Error("No vulnerabilities available to generate PDF.");
+      }
+      await generatePDF(vulnerabilities, targetName || 'Unknown Target');
     } catch (err) {
       alert(`PDF error: ${err.message}`);
     }
@@ -132,9 +133,9 @@ export default function Reports() {
           </button>
           <button
             onClick={handlePDF}
-            disabled={pdfLoading}
+            disabled={pdfLoading || vulnerabilities.length === 0}
             className="btn-danger"
-            style={{ padding: '14px 24px' }}
+            style={{ padding: '14px 24px', opacity: vulnerabilities.length === 0 ? 0.5 : 1 }}
           >
             <Download size={17} /> {pdfLoading ? 'Generating...' : 'PDF Playbook'}
           </button>

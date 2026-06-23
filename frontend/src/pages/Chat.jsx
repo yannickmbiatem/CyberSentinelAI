@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Trash2, Zap, Download } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
+import { Send, Bot, User, Trash2, Zap, Download, Paperclip, FileText, X } from 'lucide-react';
 import { chat } from '../api';
 import MarkdownRenderer from '../components/MarkdownRenderer';
 import CopyButton from '../components/CopyButton';
@@ -33,11 +34,30 @@ function loadHistory() {
 }
 
 export default function Chat() {
+  const location = useLocation();
+  const locationState = location.state || {};
+
   const [messages, setMessages] = useState(loadHistory);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [chatContext, setChatContext] = useState(locationState.context || '');
+  const [attachedFile, setAttachedFile] = useState(null); // { name: '', content: '' }
+
   const bottomRef = useRef(null);
   const textareaRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  // Load context and auto-submit initial message from navigation state if present
+  useEffect(() => {
+    if (locationState.context) {
+      setChatContext(locationState.context);
+    }
+    if (locationState.initialMessage) {
+      send(locationState.initialMessage, locationState.context || '');
+      // Clear location state to prevent resending on refresh
+      window.history.replaceState({}, document.title);
+    }
+  }, [locationState]);
 
   // Persist messages to localStorage on every change
   useEffect(() => {
@@ -50,18 +70,41 @@ export default function Chat() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  async function send(text = input) {
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
+    }
+  }, [input]);
+
+  async function send(text = input, overrideContext = null) {
     const userMsg = text.trim();
     if (!userMsg || loading) return;
     setInput('');
     const ts = new Date().toISOString();
-    const newUserMsg = { role: 'user', content: userMsg, ts };
+
+    const newUserMsg = {
+      role: 'user',
+      content: userMsg,
+      ts,
+      attachmentName: attachedFile ? attachedFile.name : null,
+    };
+
     setMessages(prev => [...prev, newUserMsg]);
     setLoading(true);
 
+    // Merge attachments and context
+    const currentContext = overrideContext !== null ? overrideContext : chatContext;
+    let finalContext = currentContext;
+    if (attachedFile) {
+      finalContext += `\n\n[USER ATTACHED FILE: ${attachedFile.name}]\n${attachedFile.content}\n[END OF ATTACHED FILE]`;
+      setAttachedFile(null);
+    }
+
     try {
       const history = messages.map(m => ({ role: m.role, content: m.content }));
-      const data = await chat(userMsg, history);
+      const data = await chat(userMsg, history, finalContext);
       setMessages(prev => [...prev, { role: 'assistant', content: data.response, ts: new Date().toISOString() }]);
     } catch (err) {
       setMessages(prev => [...prev, { role: 'assistant', content: `**Error:** ${err.message}`, ts: new Date().toISOString() }]);
@@ -76,17 +119,31 @@ export default function Chat() {
     }
   }
 
+  function handleFileChange(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setAttachedFile({ name: file.name, content: reader.result });
+    };
+    reader.readAsText(file);
+    e.target.value = null; // reset input
+  }
+
   function clearChat() {
     const cleared = [{ ...WELCOME_MSG, content: 'Chat cleared. How can I help you with cybersecurity today?', ts: new Date().toISOString() }];
     setMessages(cleared);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(cleared));
+    setChatContext('');
   }
 
   function exportChat() {
     const lines = messages.map(m => {
       const role = m.role === 'user' ? '## You' : '## CyberSentinel AI';
       const time = m.ts ? `\n*${new Date(m.ts).toLocaleString()}*` : '';
-      return `${role}${time}\n\n${m.content}`;
+      const attachment = m.attachmentName ? `\n*(Attached file: ${m.attachmentName})*` : '';
+      return `${role}${time}${attachment}\n\n${m.content}`;
     });
     const md = `# CyberSentinel AI — Chat Export\n*Exported: ${new Date().toLocaleString()}*\n\n---\n\n${lines.join('\n\n---\n\n')}`;
     const blob = new Blob([md], { type: 'text/markdown' });
@@ -101,7 +158,7 @@ export default function Chat() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
       {/* Header */}
-      <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 28px' }}>
+      <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 28px', flexShrink: 0 }}>
         <div>
           <div className="page-title" style={{ fontSize: '1.3rem' }}>
             <Bot size={20} color="var(--accent)" />
@@ -123,6 +180,27 @@ export default function Chat() {
           </button>
         </div>
       </div>
+
+      {/* Active Context Banner */}
+      {chatContext && (
+        <div style={{ background: 'var(--accent-dim)', borderBottom: '1px solid var(--border-accent)', padding: '8px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--accent)' }}>
+            <Bot size={14} />
+            <span><strong>Active Context:</strong> Pre-loaded from system scanning/fusion findings</span>
+          </div>
+          <button
+            onClick={() => setChatContext('')}
+            style={{
+              background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 11,
+              display: 'flex', alignItems: 'center', gap: 4
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = 'var(--accent-red)'}
+            onMouseLeave={e => e.currentTarget.style.color = 'var(--text-secondary)'}
+          >
+            <X size={12} /> Clear Context
+          </button>
+        </div>
+      )}
 
       {/* Quick Prompts bar */}
       <div style={{ padding: '10px 24px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, overflowX: 'auto', flexShrink: 0 }}>
@@ -172,7 +250,19 @@ export default function Chat() {
               padding: '12px 16px', position: 'relative',
             }}>
               {m.role === 'user' ? (
-                <p style={{ margin: 0, fontSize: 14, lineHeight: 1.6, color: '#060b14', fontWeight: 500 }}>{m.content}</p>
+                <div>
+                  <p style={{ margin: 0, fontSize: 14, lineHeight: 1.6, color: '#060b14', fontWeight: 500 }}>{m.content}</p>
+                  {m.attachmentName && (
+                    <div style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                      background: 'rgba(6, 11, 20, 0.15)', padding: '4px 8px',
+                      borderRadius: 6, marginTop: 8, fontSize: 11, color: '#060b14', fontWeight: 600
+                    }}>
+                      <FileText size={12} />
+                      {m.attachmentName}
+                    </div>
+                  )}
+                </div>
               ) : (
                 <div>
                   <MarkdownRenderer content={m.content} />
@@ -218,25 +308,74 @@ export default function Chat() {
 
       {/* Input area */}
       <div style={{ padding: '16px 24px', borderTop: '1px solid var(--border)', background: 'var(--bg-secondary)', flexShrink: 0 }}>
-        <div style={{ maxWidth: 860, margin: '0 auto', display: 'flex', gap: 10, alignItems: 'flex-end' }}>
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask about vulnerabilities, CVEs, pentesting techniques… (Ctrl+Enter to send)"
-            rows={2}
-            className="input-field"
-            style={{ resize: 'none', flex: 1, fontFamily: 'Inter, sans-serif', lineHeight: 1.5 }}
-          />
-          <button
-            onClick={() => send()}
-            disabled={loading || !input.trim()}
-            className="btn-primary"
-            style={{ paddingLeft: 20, paddingRight: 20, flexShrink: 0, height: 48 }}
-          >
-            <Send size={17} />
-          </button>
+        <div style={{ maxWidth: 860, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          
+          {/* Attachment Preview Badge */}
+          {attachedFile && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: 'var(--bg-card)', border: '1px solid var(--border)',
+              padding: '6px 12px', borderRadius: 8, alignSelf: 'flex-start'
+            }}>
+              <FileText size={14} color="var(--accent)" />
+              <span style={{ fontSize: 12, color: 'var(--text-primary)', fontWeight: 500 }}>{attachedFile.name}</span>
+              <button
+                onClick={() => setAttachedFile(null)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-red)', padding: 0 }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
+            
+            {/* Attachment Button */}
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="btn-ghost"
+              style={{
+                width: 48, height: 48, borderRadius: 10, display: 'flex',
+                alignItems: 'center', justifyContent: 'center', padding: 0, flexShrink: 0
+              }}
+              title="Attach text/report file"
+              disabled={loading}
+            >
+              <Paperclip size={18} />
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".txt,.xml,.json,.nmap,.log,.csv"
+              onChange={handleFileChange}
+              style={{ display: 'none' }}
+            />
+
+            {/* Textarea Input */}
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Ask about vulnerabilities, CVEs, pentesting techniques… (Ctrl+Enter to send)"
+              className="input-field"
+              style={{
+                resize: 'none', flex: 1, fontFamily: 'Inter, sans-serif',
+                lineHeight: 1.5, minHeight: '48px', height: '48px', maxHeight: '200px',
+                paddingTop: 12, paddingBottom: 12, overflowY: 'auto'
+              }}
+            />
+
+            {/* Send Button */}
+            <button
+              onClick={() => send()}
+              disabled={loading || (!input.trim() && !attachedFile)}
+              className="btn-primary"
+              style={{ paddingLeft: 20, paddingRight: 20, flexShrink: 0, height: 48 }}
+            >
+              <Send size={17} />
+            </button>
+          </div>
         </div>
       </div>
     </div>

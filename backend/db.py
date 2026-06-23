@@ -31,6 +31,23 @@ CREATE TABLE IF NOT EXISTS scans (
 );
 CREATE INDEX IF NOT EXISTS idx_scans_timestamp ON scans(timestamp);
 
+-- Web vulnerability scans (Nikto results).
+CREATE TABLE IF NOT EXISTS web_scans (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    target           TEXT    NOT NULL,
+    port             INTEGER NOT NULL DEFAULT 80,
+    ssl              INTEGER NOT NULL DEFAULT 0,  -- 0/1 boolean
+    timestamp        TEXT    NOT NULL,
+    findings_json    TEXT    NOT NULL,   -- list of finding dicts
+    finding_count    INTEGER NOT NULL DEFAULT 0,
+    critical_count   INTEGER NOT NULL DEFAULT 0,
+    high_count       INTEGER NOT NULL DEFAULT 0,
+    medium_count     INTEGER NOT NULL DEFAULT 0,
+    low_count        INTEGER NOT NULL DEFAULT 0,
+    info_count       INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_web_scans_timestamp ON web_scans(timestamp);
+
 -- Append-only audit trail: every scan decision (allowed or refused).
 -- This is an ETHICAL CONTROL: every scan is attributable and reviewable.
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -159,6 +176,57 @@ def get_audit_log(limit=50):
     conn = _conn()
     rows = conn.execute(
         "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ── Web scan persistence (Nikto) ───────────────────────────────────────────────
+def save_web_scan(target: str, port: int, ssl: bool,
+                  findings: list, severity_counts: dict) -> int:
+    """Persist a completed Nikto web scan. Returns the new scan id."""
+    _ensure_init()
+    ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn = _conn()
+    cur = conn.execute(
+        """INSERT INTO web_scans
+           (target, port, ssl, timestamp, findings_json, finding_count,
+            critical_count, high_count, medium_count, low_count, info_count)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            target, port, 1 if ssl else 0, ts,
+            json.dumps(findings), len(findings),
+            severity_counts.get("CRITICAL", 0),
+            severity_counts.get("HIGH", 0),
+            severity_counts.get("MEDIUM", 0),
+            severity_counts.get("LOW", 0),
+            severity_counts.get("INFO", 0),
+        ),
+    )
+    scan_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return scan_id
+
+
+def get_latest_web_scan() -> dict | None:
+    """Most recent web scan as a dict, or None."""
+    _ensure_init()
+    conn = _conn()
+    row = conn.execute("SELECT * FROM web_scans ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_web_scan_history(limit: int = 20) -> list[dict]:
+    """Recent web scans (newest first) for the history view."""
+    _ensure_init()
+    conn = _conn()
+    rows = conn.execute(
+        """SELECT id, target, port, ssl, timestamp, finding_count,
+                  critical_count, high_count, medium_count, low_count, info_count
+           FROM web_scans ORDER BY id DESC LIMIT ?""",
+        (limit,),
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]

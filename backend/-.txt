@@ -1,0 +1,16 @@
+- Nikto v2.6.0/
++ Target Host: testphp.vulnweb.com
++ Target Port: 80
++ GET Unable to connect to testphp.vulnweb.com:80.
+- Nikto v2.6.0/
++ Target Host: demo.testfire.net
++ Target Port: 80
++ GET Unable to connect to demo.testfire.net:80.
+- Nikto v2.6.0/
++ Target Host: badssl.com
++ Target Port: 443
++ SSL Info:           Subject:  /CN=*.badssl.com
+                      CN:       *.badssl.com
+                      SAN:      *.badssl.com, badssl.com
+                      Ciphers:  ECDHE-RSA-AES128-GCM-SHA256
+                      Issuer:   /C=US/O=Let's Encrypt/CN=R13

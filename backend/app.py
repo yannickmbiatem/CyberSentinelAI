@@ -41,11 +41,21 @@ You specialize in: Nmap analysis, CVE interpretation, OWASP Top 10, network secu
 WiFi security (WPA2), web application security, and remediation planning.
 Always be precise, technical, and practical. Provide exact commands when relevant.
 When discussing offensive techniques, always note they must only be used on authorized
-systems. Never assist with illegal activities."""
+systems. Never assist with illegal activities.
+CRITICAL RULE: You must ONLY answer questions related to cybersecurity, penetration testing, IT infrastructure, or networking. If a user asks a question that is not related to these topics (e.g., general knowledge, cooking, programming unrelated to security), you MUST politely decline to answer and state that your expertise is strictly limited to cybersecurity."""
 
 
-async def call_groq(messages: list, max_tokens: int = 1024, temperature: float = 0.3) -> str:
+async def call_groq(messages: list, max_tokens: int = 1024, temperature: float = 0.3, response_format: dict = None) -> str:
     """Central function to call Groq API. Used by all endpoints."""
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if response_format:
+        payload["response_format"] = response_format
+
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             GROQ_URL,
@@ -53,12 +63,7 @@ async def call_groq(messages: list, max_tokens: int = 1024, temperature: float =
                 "Authorization": f"Bearer {GROQ_API_KEY}",
                 "Content-Type": "application/json",
             },
-            json={
-                "model": GROQ_MODEL,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-            },
+            json=payload,
             timeout=60.0,
         )
         resp.raise_for_status()
@@ -75,13 +80,18 @@ async def health():
 class ChatRequest(BaseModel):
     message: str
     history: list[dict] = []
+    context: str = ""
 
 class ChatResponse(BaseModel):
     response: str
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    sys_prompt = SYSTEM_PROMPT
+    if req.context:
+        sys_prompt += f"\n\nCURRENT CONTEXT:\n{req.context}"
+        
+    messages = [{"role": "system", "content": sys_prompt}]
     for h in req.history[-10:]:
         messages.append({"role": h["role"], "content": h["content"]})
     messages.append({"role": "user", "content": req.message})
@@ -131,7 +141,8 @@ async def run_scan(req: ScanRequest, request: Request):
 
     # ── Execute scan ───────────────────────────────────────────────────────────
     from scanner import scan_target
-    scan_results = scan_target(req.target, req.ports)
+    from fastapi.concurrency import run_in_threadpool
+    scan_results = await run_in_threadpool(scan_target, req.target, req.ports)
 
     # Attach classification metadata to results for the frontend
     scan_results["target_classification"] = target_kind
@@ -311,37 +322,53 @@ async def fuse_reports(req: ReportFusionRequest):
 
 {combined}
 
-Provide a unified 360 security assessment:
-
-## Executive Summary
-Brief overview for management (non-technical).
-
-## Critical Findings
-List ALL critical and high-severity issues found across all tools. Number them.
-
-## Risk Matrix
-| Finding | Source Tool | Severity | CVSS Score (estimate) | Exploitability |
-|---------|------------|----------|----------------------|----------------|
-(fill this table)
-
-## Cross-Tool Correlations
-Findings that appear in multiple tools or are related to each other.
-
-## Prioritized Remediation Plan
-Ordered by severity. For each item:
-- What to fix
-- Exact commands to run
-- Expected outcome
-
-## Overall Security Score
-Rate this system from 0-100 and explain why."""
+Provide a unified 360 security assessment.
+Format your response as a valid JSON object EXACTLY like this:
+{{
+  "analysis": "The full markdown string containing Executive Summary, Critical Findings, Risk Matrix, Cross-Tool Correlations, and Prioritized Remediation Plan. Use \\n for newlines.",
+  "vulnerabilities": [
+    {{
+      "name": "Name of vulnerability",
+      "severity": "CRITICAL", // Must be CRITICAL, HIGH, MEDIUM, LOW, or INFO
+      "cve": "CVE-XXXX-XXXX", // Or empty string if none
+      "description": "Short description",
+      "fix": "Short remediation instructions",
+      "command": "Commands to run, if applicable",
+      "priority": 1 // Integer, 1 being highest priority
+    }}
+  ]
+}}
+DO NOT return any markdown formatting outside the JSON object. Just raw JSON.
+"""
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": prompt}
     ]
-    ai_text = await call_groq(messages, max_tokens=4000)
-    return {"analysis": ai_text, "target": req.target_name}
+    # Enforce JSON output format from Groq
+    ai_text = await call_groq(messages, max_tokens=4000, response_format={"type": "json_object"})
+    
+    try:
+        # Extract the JSON block
+        clean_json = ai_text.strip()
+        start_idx = clean_json.find('{')
+        end_idx = clean_json.rfind('}')
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            clean_json = clean_json[start_idx:end_idx + 1]
+        
+        parsed = json.loads(clean_json)
+        return {
+            "analysis": parsed.get("analysis", "Analysis could not be extracted."),
+            "vulnerabilities": parsed.get("vulnerabilities", []),
+            "target": req.target_name
+        }
+    except Exception as e:
+        # Fallback if AI didn't follow JSON format strictly
+        return {
+            "analysis": f"**Warning:** Output format parsing failed. Raw output below:\n\n{ai_text}",
+            "vulnerabilities": [],
+            "target": req.target_name
+        }
 
 
 # ── PDF Generator Endpoint ────────────────────────────────────────────────────
@@ -407,6 +434,165 @@ async def classify(target: str):
     """Classify a target before scanning (for frontend pre-validation)."""
     from policy import classify_target
     return classify_target(target)
+
+
+# ── Nikto Web Scanner Endpoints ───────────────────────────────────────────────
+class NiktoScanRequest(BaseModel):
+    target: str                          # URL, IP, or hostname
+    port: int = 80                       # Target port
+    ssl: bool = False                    # Force SSL/TLS
+    tuning: str = "1234689"             # Nikto tuning categories (1=files,2=misconfig,3=info,4=inject,6=xss,8=exec,9=sql)
+    maxtime: str = "2m"                  # Scan time limit: 30s / 2m / 5m
+
+@app.post("/api/nikto/scan")
+async def start_nikto_scan(req: NiktoScanRequest, request: Request):
+    """
+    Start a Nikto web vulnerability scan. Returns a job_id immediately.
+    Poll /api/nikto/status/{job_id} for results.
+    """
+    from policy import classify_target, is_rate_limited
+    from db import log_audit
+
+    client_ip = request.client.host if request.client else "unknown"
+
+    # Normalize target for policy classification
+    from urllib.parse import urlparse
+    parsed = urlparse(req.target if req.target.startswith("http") else f"http://{req.target}")
+    target_host = parsed.hostname or req.target
+
+    classification = classify_target(target_host)
+    target_kind = classification.get("kind", "unknown")
+
+    # Block forbidden targets
+    if target_kind in ("forbidden", "invalid"):
+        log_audit(req.target, "REFUSED_FORBIDDEN", classification,
+                  authorized=False, client_ip=client_ip, scan_type="web")
+        raise HTTPException(
+            status_code=403,
+            detail=f"Web scan refused: target classified as '{target_kind}'. "
+                   f"Reason: {classification.get('reason', '')}"
+        )
+
+    # Rate limit check (3 web scans per minute)
+    if is_rate_limited(scan_type="web"):
+        log_audit(req.target, "REFUSED_RATE_LIMIT", classification,
+                  authorized=False, client_ip=client_ip, scan_type="web")
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Max 3 web scans/minute. Please wait and try again."
+        )
+
+    # Log as ALLOWED
+    log_audit(req.target, "ALLOWED", classification,
+              authorized=True, client_ip=client_ip, scan_type="web")
+
+    # Start the scan asynchronously
+    from nikto_scanner import start_nikto_scan as _start
+    job_id = _start(
+        target=req.target,
+        port=req.port,
+        ssl=req.ssl,
+        tuning=req.tuning,
+        maxtime=req.maxtime,
+    )
+
+    return {
+        "job_id": job_id,
+        "status": "started",
+        "target": req.target,
+        "target_classification": target_kind,
+        "message": f"Nikto scan started. Poll /api/nikto/status/{job_id} for results.",
+    }
+
+
+@app.get("/api/nikto/status/{job_id}")
+async def nikto_scan_status(job_id: str):
+    """Poll a Nikto scan job for status and results."""
+    from nikto_scanner import get_job_status
+    job = get_job_status(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    return job
+
+
+@app.post("/api/nikto/analyze")
+async def analyze_nikto_findings(job_id: str):
+    """
+    Run AI analysis on a completed Nikto scan job.
+    Returns markdown analysis from Groq.
+    """
+    from nikto_scanner import get_job_status
+    job = get_job_status(job_id)
+
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    if job.get("status") != "done":
+        raise HTTPException(status_code=400, detail="Scan not yet complete. Wait for status=done.")
+
+    findings = job.get("findings", [])
+    severity_counts = job.get("severity_counts", {})
+    target = job.get("target", "unknown")
+    port = job.get("port", 80)
+
+    if not findings:
+        return {"analysis": "No web vulnerabilities were found by Nikto on this target.", "job_id": job_id}
+
+    # Build a structured summary for the AI
+    findings_text = "\n".join([
+        f"- [{f['severity']}] {f['description']}"
+        + (f" (Path: {f['path']})" if f.get("path") and f["path"] != "/" else "")
+        + (f" [{f['osvdb']}]" if f.get("osvdb") else "")
+        for f in findings[:40]  # limit tokens
+    ])
+
+    prompt = f"""You are analyzing a Nikto web vulnerability scan for CyberSentinel AI.
+
+TARGET: {target}:{port}
+TOTAL FINDINGS: {len(findings)}
+SEVERITY BREAKDOWN: {severity_counts}
+
+FINDINGS:
+{findings_text}
+
+Provide a professional web security assessment with EXACTLY these sections:
+
+## Executive Summary
+Brief overview of the web security posture and key risks.
+
+## Critical & High Severity Findings
+Explain each critical/high finding in detail: what it means, how it can be exploited. If there are none, explicitly state so.
+
+## Attack Surface Analysis
+What attack vectors does this expose? OWASP Top 10 mapping where applicable. If the findings are purely informational (e.g., scan timeouts or max execution time reached) and do not expose an attack vector, state that no specific attack surface was exposed by these findings. DO NOT hallucinate or invent vulnerabilities (like SSRF) for timeouts.
+
+## Recommended Remediation
+Specific fixes with exact configuration examples or code snippets for each finding. If the finding is just a scan timeout, recommend increasing the scan timeout or running a more targeted scan, without suggesting unnecessary mitigations like a WAF.
+
+## Priority Actions (Top 5)
+The 5 most urgent things to fix, in order. If there are no severe findings, provide recommendations to improve the scan reliability or state that no immediate priority actions are required.
+
+Be technical, precise, and provide actionable commands."""
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": prompt}
+    ]
+    ai_text = await call_groq(messages, max_tokens=3500, temperature=0.2)
+    return {"analysis": ai_text, "job_id": job_id, "target": target}
+
+
+@app.get("/api/nikto/history")
+async def nikto_history(limit: int = 20):
+    """Return web scan history from the database."""
+    from db import get_web_scan_history
+    return {"history": get_web_scan_history(limit=limit)}
+
+
+@app.get("/api/nikto/info")
+async def nikto_info():
+    """Return information about the Nikto installation on this server."""
+    from nikto_scanner import get_nikto_info
+    return get_nikto_info()
 
 
 # ── Run Server ────────────────────────────────────────────────────────────────
