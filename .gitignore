@@ -3,6 +3,14 @@ backend/.env
 *.env
 !*.env.example
 
+# Large binary files (>100MB — GitHub limit)
+strawberry-perl.zip
+*.zip
+nikto/
+document/
+*.docx
+~$*
+
 # Python
 backend/venv/
 __pycache__/
