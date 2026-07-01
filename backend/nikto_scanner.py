@@ -37,10 +37,10 @@ def find_nikto() -> str | None:
       3. System PATH: 'nikto' command exists natively
     Returns the absolute path to nikto.pl, or None if not found.
     """
-    # 1. Relative to THIS file: go up one level (backend/) → project root → nikto/program/nikto.pl
+    # 1. Relative to THIS file: go up one level (backend/) → project root → nikto/program/nikto.script
     this_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(this_dir)
-    relative_path = os.path.join(project_root, "nikto", "program", "nikto.pl")
+    relative_path = os.path.join(project_root, "nikto", "program", "nikto.script")
     if os.path.isfile(relative_path):
         return relative_path
 
@@ -57,6 +57,17 @@ def find_nikto() -> str | None:
         )
         if result.returncode == 0 or "Nikto" in (result.stdout + result.stderr):
             return "nikto"  # Use as a direct command
+    except Exception:
+        pass
+
+    # 4. Fallback to Docker (bypasses Windows Defender quarantining nikto.pl)
+    try:
+        result = subprocess.run(
+            ["docker", "--version"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            return "docker"
     except Exception:
         pass
 
@@ -86,23 +97,30 @@ def find_perl() -> str:
 
 # ── Severity heuristics ────────────────────────────────────────────────────────
 _SEVERITY_RULES = [
-    # Keywords that map to severity levels (checked in order)
-    (re.compile(r"sql.inject|union.select|blind.sql|error-based", re.I), "CRITICAL"),
-    (re.compile(r"command.inject|remote.code.exec|rce|shell.upload|backdoor|webshell", re.I), "CRITICAL"),
-    (re.compile(r"xss|cross.site.script|reflected|stored.script", re.I), "HIGH"),
-    (re.compile(r"lfi|local.file|path.traversal|directory.traversal|\.\.\/", re.I), "HIGH"),
-    (re.compile(r"rfi|remote.file.include", re.I), "HIGH"),
-    (re.compile(r"csrf|cross.site.request.forgery", re.I), "HIGH"),
-    (re.compile(r"default.password|default.credential|admin.admin|password.file", re.I), "HIGH"),
-    (re.compile(r"phpinfo|debug.mode|stack.trace|exception.detail", re.I), "MEDIUM"),
-    (re.compile(r"missing.header|x-frame-options|content-security-policy|x-xss-protection|strict-transport", re.I), "MEDIUM"),
-    (re.compile(r"outdated|old.version|apache.[\d]|nginx.[\d]|php.[\d]|openssl.[\d]", re.I), "MEDIUM"),
-    (re.compile(r"backup.file|\.bak|\.old|\.orig|\.swp|config.file", re.I), "MEDIUM"),
-    (re.compile(r"directory.listing|index.of|listing.enabled", re.I), "MEDIUM"),
-    (re.compile(r"cookie.no.httponly|cookie.no.secure|session.fixation", re.I), "MEDIUM"),
-    (re.compile(r"robots.txt|sitemap.xml|\.git|\.svn|\.env|\.htaccess", re.I), "LOW"),
-    (re.compile(r"server.banner|server.header|x-powered-by|technology.info", re.I), "LOW"),
-    (re.compile(r"allowed.method|options.method|trace.method|put.method", re.I), "LOW"),
+    # CRITICAL — confirmed exploitable injection/execution vulnerabilities
+    (re.compile(r"\bsql\s*inject|union\s+select|blind\s+sql|error.based\s+sql", re.I), "CRITICAL"),
+    (re.compile(r"\bcommand\s+inject|\bremote\s+code\s+exec|\brce\b|\bshell\s+upload|\bbackdoor\b|\bwebshell\b", re.I), "CRITICAL"),
+    (re.compile(r"\bfile\s+inclusion\s+\(remote\)|\bcode\s+execution\b", re.I), "CRITICAL"),
+
+    # HIGH — serious but not directly exploitable without extra steps
+    (re.compile(r"\bxss\b|cross.site\s+script|reflected\s+xss|stored\s+xss", re.I), "HIGH"),
+    (re.compile(r"\blfi\b|\blocal\s+file\s+inclus|\bpath\s+traversal|\bdirectory\s+traversal", re.I), "HIGH"),
+    (re.compile(r"\brfi\b|\bremote\s+file\s+inclus", re.I), "HIGH"),
+    (re.compile(r"\bcsrf\b|\bcross.site\s+request\s+forgery", re.I), "HIGH"),
+    (re.compile(r"\bdefault\s+password|\bdefault\s+credential|\badmin[:/]admin|\bpassword\s+file\b", re.I), "HIGH"),
+
+    # MEDIUM — configuration issues and information disclosure
+    (re.compile(r"\bphpinfo\b|\bdebug\s+mode\b|\bstack\s+trace\b|\bexception\s+detail\b", re.I), "MEDIUM"),
+    (re.compile(r"\bmissing\s+header|x-frame-options|content-security-policy|x-xss-protection|strict-transport", re.I), "MEDIUM"),
+    (re.compile(r"\boutdated\b|\bold\s+version|apache[\s/][\d]|nginx[\s/][\d]|php[\s/][\d]|openssl[\s/][\d]", re.I), "MEDIUM"),
+    (re.compile(r"\bbackup\s+file|\\.bak\b|\\.old\b|\\.orig\b|\\.swp\b|\bconfig\s+file\b", re.I), "MEDIUM"),
+    (re.compile(r"\bdirectory\s+listing|\bindex\s+of\b|\blisting\s+enabled\b", re.I), "MEDIUM"),
+    (re.compile(r"\bcookie\b.{0,20}\bno\s+httponly|\bcookie\b.{0,20}\bno\s+secure|\bsession\s+fixation\b", re.I), "MEDIUM"),
+
+    # LOW — informational with minor risk
+    (re.compile(r"\brobots\.txt\b|\bsitemap\.xml\b|/\.git\b|/\.svn\b|/\.env\b|/\.htaccess\b", re.I), "LOW"),
+    (re.compile(r"\bserver\s+banner\b|\bserver\s+header\b|\bx-powered-by\b|\btechnology\s+info\b", re.I), "LOW"),
+    (re.compile(r"\ballowed\s+method\b|\boptions\s+method\b|\btrace\s+method\b|\bput\s+method\b", re.I), "LOW"),
 ]
 
 
@@ -141,6 +159,8 @@ def parse_nikto_output(raw_output: str) -> list[dict]:
             "End Time:", "1 host(s) tested", "Nikto", "No web server found",
             "SSL Info:", "Issuer:", "Subject:", "Ciphers:", "Templ:",
             "+ Server:", "Uncommon header", "retrieved but not saved",
+            "No CGI Directories found", "Platform:", "Multiple IPs found",
+            "maximum execution time", "Scan terminated:", "Unable to connect"
         ]
         if any(p.lower() in line.lower() for p in skip_patterns):
             continue
@@ -205,11 +225,12 @@ def _build_nikto_command(
     ssl: bool,
     tuning: str,
     maxtime: str,
-    output_format: str = "txt",
 ) -> list[str]:
     """Build the Nikto command list."""
-    # If nikto_path ends in .pl, we need perl to run it
-    if nikto_path.endswith(".pl"):
+    # If nikto_path ends in .pl or .script, we need perl to run it
+    if nikto_path == "docker":
+        cmd = ["docker", "run", "--rm", "securecodebox/nikto"]
+    elif nikto_path.endswith(".pl") or nikto_path.endswith(".script"):
         perl = find_perl()
         cmd = [perl, nikto_path]
     else:
@@ -223,8 +244,9 @@ def _build_nikto_command(
     if tuning:
         cmd += ["-Tuning", tuning]
 
-    # Output as plain text (easier to parse than XML for our purposes)
-    cmd += ["-Format", output_format, "-output", "-"]  # '-' means stdout
+    # NOTE: Do NOT add -output or -Format here.
+    # Nikto 2.6.0 on Windows silently drops stdout when -output/-Format are set.
+    # We capture stdout directly from the subprocess pipe instead.
 
     return cmd
 

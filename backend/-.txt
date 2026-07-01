@@ -14,3 +14,19 @@
                       SAN:      *.badssl.com, badssl.com
                       Ciphers:  ECDHE-RSA-AES128-GCM-SHA256
                       Issuer:   /C=US/O=Let's Encrypt/CN=R13
+- Nikto v2.6.0/
++ Target Host: localhost
++ Target Port: 3000
++ GET Unable to connect to localhost:3000.
+- Nikto v2.6.0/
++ Target Host: localhost
++ Target Port: 3000
++ GET Unable to connect to localhost:3000.
+- Nikto v2.6.0/
++ Target Host: 127.0.0.1
++ Target Port: 3000
++ GET Unable to connect to 127.0.0.1:3000.
+- Nikto v2.6.0/
++ Target Host: nafaapplicationtiers.eastus.cloudapp.azure.com
++ Target Port: 9001
++ GET Unable to connect to nafaapplicationtiers.eastus.cloudapp.azure.com:9001.

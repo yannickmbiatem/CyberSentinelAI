@@ -220,11 +220,24 @@ def _run_nikto(target: str) -> str:
 
 
 # ── Public entry point ─────────────────────────────────────────────────────────
+import urllib.parse
+
 def scan_target(target: str, ports: str = "1-1024") -> dict:
     """
     Scan a target. Uses nmap if available, otherwise a pure-Python socket scan.
     Always returns a dict (never raises). On total failure returns {"error": ...}.
     """
+    # Clean up the target to be just an IP or hostname
+    original_target = target.strip()
+    if "://" not in original_target:
+        original_target = "http://" + original_target
+    try:
+        parsed = urllib.parse.urlparse(original_target)
+        if parsed.hostname:
+            target = parsed.hostname
+    except Exception:
+        pass
+
     res = None
     if _nmap_available():
         try:

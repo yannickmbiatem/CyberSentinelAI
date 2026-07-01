@@ -229,14 +229,28 @@ export default function WebScanner() {
   const [history, setHistory] = useState([]);
   const [activeTab, setActiveTab] = useState('findings'); // 'findings' | 'analysis' | 'history' | 'raw'
 
-  // ── Auto-detect SSL from URL scheme
+  // ── Auto-detect SSL AND port from URL scheme + explicit port in URL
   useEffect(() => {
-    if (target.startsWith('https://')) {
-      setSsl(true);
-      if (port === 80) setPort(443);
-    } else if (target.startsWith('http://')) {
-      setSsl(false);
-      if (port === 443) setPort(80);
+    try {
+      // Ensure URL is parseable — prepend http:// if missing scheme
+      const raw = target.trim();
+      const hasScheme = raw.startsWith('http://') || raw.startsWith('https://');
+      const urlToParse = hasScheme ? raw : `http://${raw}`;
+      const parsed = new URL(urlToParse);
+
+      // SSL detection
+      const isHttps = parsed.protocol === 'https:';
+      setSsl(isHttps);
+
+      // Port detection — if the URL has an explicit port, use it.
+      // Otherwise fall back to the protocol default (443 / 80).
+      if (parsed.port) {
+        setPort(Number(parsed.port));
+      } else {
+        setPort(isHttps ? 443 : 80);
+      }
+    } catch {
+      // Malformed URL while typing — leave port/ssl as-is
     }
   }, [target]);
 
